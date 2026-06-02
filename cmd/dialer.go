@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/tools/container/intsets"
 	"net/url"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +22,9 @@ import (
 )
 
 var UnableToConnectErr = fmt.Errorf("unable to connect to the proxy node")
+
+// embeddedNode is set at build time by build_inline.sh for gg_static_inline.
+var embeddedNode string
 
 type DialerWithLatency struct {
 	Dialer  *dialer.Dialer
@@ -38,6 +43,24 @@ func GetDialer(log *logrus.Logger) (d *dialer.Dialer, err error) {
 		}
 		return d, nil
 	}
+	// Auto-detect config.dae in current directory
+	if link, err := resolveNodeFromFile("config.dae"); err == nil {
+		log.Infoln("Auto-detected node from config.dae")
+		d, err = GetDialerFromLink(link, opt, config.ParamsObj.TestNode, config.ParamsObj.TestURL)
+		if err != nil {
+			return nil, err
+		}
+		return d, nil
+	}
+	// Use built-in embedded node (for gg_static_inline)
+	if embeddedNode != "" {
+		log.Infoln("Using built-in node")
+		d, err = GetDialerFromLink(embeddedNode, opt, config.ParamsObj.TestNode, config.ParamsObj.TestURL)
+		if err != nil {
+			return nil, err
+		}
+		return d, nil
+	}
 	if config.ParamsObj.Subscription.Link != "" {
 		if d, err = GetDialerFromSubscription(log, opt, config.ParamsObj.TestNode, config.ParamsObj.TestURL); err != nil {
 			return nil, err
@@ -51,6 +74,13 @@ func GetDialer(log *logrus.Logger) (d *dialer.Dialer, err error) {
 }
 
 func GetDialerFromLink(nodeLink string, opt *dialer.GlobalOption, testNode bool, testURL string) (d *dialer.Dialer, err error) {
+	if strings.HasPrefix(nodeLink, "@") {
+		link, err := resolveNodeFromFile(nodeLink[1:])
+		if err != nil {
+			return nil, err
+		}
+		nodeLink = link
+	}
 	u, err := url.Parse(nodeLink)
 	if err != nil {
 		return nil, err
@@ -65,6 +95,30 @@ func GetDialerFromLink(nodeLink string, opt *dialer.GlobalOption, testNode bool,
 		}
 	}
 	return d, nil
+}
+
+func resolveNodeFromFile(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	content := string(b)
+
+	// dae config format: node_name: "url"
+	re := regexp.MustCompile(`(?m)^\s*\w+\s*:\s*"((?:vless|vmess|trojan|trojan-go|ss|ssr|socks5|http)://[^"]+)"`)
+	matches := re.FindAllStringSubmatch(content, -1)
+	if len(matches) > 0 {
+		return matches[0][1], nil
+	}
+
+	// fallback: any proxy URL
+	re = regexp.MustCompile(`((?:vless|vmess|trojan|trojan-go|ss|ssr|socks5|http)://[^\s"'\]]+)`)
+	matches = re.FindAllStringSubmatch(content, -1)
+	if len(matches) > 0 {
+		return matches[0][1], nil
+	}
+
+	return "", fmt.Errorf("no proxy node found in file: %s", path)
 }
 
 func GetDialerFromInput(opt *dialer.GlobalOption, testNode bool, testURL string) (d *dialer.Dialer, err error) {

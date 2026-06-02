@@ -22,6 +22,7 @@ func init() {
 	dialer.FromLinkRegister("vmess", NewV2Ray)
 	dialer.FromLinkRegister("vless", NewV2Ray)
 	dialer.FromClashRegister("vmess", NewVMessFromClashObj)
+	dialer.FromClashRegister("vless", NewVLESSFromClashObj)
 }
 
 type V2Ray struct {
@@ -73,6 +74,17 @@ func NewV2Ray(link string, opt *dialer.GlobalOption) (*dialer.Dialer, error) {
 
 func NewVMessFromClashObj(o *yaml.Node, opt *dialer.GlobalOption) (*dialer.Dialer, error) {
 	s, err := ParseClashVMess(o)
+	if err != nil {
+		return nil, err
+	}
+	if opt.AllowInsecure {
+		s.AllowInsecure = true
+	}
+	return s.Dialer()
+}
+
+func NewVLESSFromClashObj(o *yaml.Node, opt *dialer.GlobalOption) (*dialer.Dialer, error) {
+	s, err := ParseClashVLESS(o)
 	if err != nil {
 		return nil, err
 	}
@@ -235,6 +247,86 @@ func ParseClashVMess(o *yaml.Node) (data *V2Ray, err error) {
 		Alpn:          alpn,
 		V:             "2",
 		Protocol:      "vmess",
+	}
+	if option.TLS {
+		s.TLS = "tls"
+	}
+	return s, nil
+}
+
+func ParseClashVLESS(o *yaml.Node) (data *V2Ray, err error) {
+	type WSOptions struct {
+		Path                string            `yaml:"path,omitempty"`
+		Headers             map[string]string `yaml:"headers,omitempty"`
+		MaxEarlyData        int               `yaml:"max-early-data,omitempty"`
+		EarlyDataHeaderName string            `yaml:"early-data-header-name,omitempty"`
+	}
+	type GrpcOptions struct {
+		GrpcServiceName string `proxy:"grpc-service-name,omitempty"`
+	}
+	type HTTP2Options struct {
+		Host []string `proxy:"host,omitempty"`
+		Path string   `proxy:"path,omitempty"`
+	}
+	type VlessOption struct {
+		Name           string       `yaml:"name"`
+		Server         string       `yaml:"server"`
+		Port           int          `yaml:"port"`
+		UUID           string       `yaml:"uuid"`
+		UDP            bool         `yaml:"udp,omitempty"`
+		Network        string       `yaml:"network,omitempty"`
+		TLS            bool         `yaml:"tls,omitempty"`
+		SkipCertVerify bool         `yaml:"skip-cert-verify,omitempty"`
+		ServerName     string       `yaml:"servername,omitempty"`
+		Flow           string       `yaml:"flow,omitempty"`
+		HTTPOpts       interface{}  `yaml:"http-opts,omitempty"`
+		HTTP2Opts      HTTP2Options `yaml:"h2-opts,omitempty"`
+		GrpcOpts       GrpcOptions  `yaml:"grpc-opts,omitempty"`
+		WSOpts         WSOptions    `yaml:"ws-opts,omitempty"`
+	}
+	var option VlessOption
+	if err = o.Decode(&option); err != nil {
+		return nil, err
+	}
+
+	if option.Network == "" {
+		option.Network = "tcp"
+	}
+	var (
+		path string
+		host string
+		alpn string
+	)
+	switch option.Network {
+	case "ws":
+		path = option.WSOpts.Path
+		host = option.WSOpts.Headers["Host"]
+		alpn = "http/1.1"
+	case "grpc":
+		path = option.GrpcOpts.GrpcServiceName
+	case "h2":
+		host = strings.Join(option.HTTP2Opts.Host, ",")
+		path = option.HTTP2Opts.Path
+		alpn = "h2"
+	case "http":
+		// TODO
+	}
+	s := &V2Ray{
+		Ps:            option.Name,
+		Add:           option.Server,
+		Port:          strconv.Itoa(option.Port),
+		ID:            option.UUID,
+		Aid:           "0",
+		Net:           option.Network,
+		Type:          "none", // FIXME
+		Host:          host,
+		SNI:           option.ServerName,
+		Path:          path,
+		AllowInsecure: option.SkipCertVerify,
+		Alpn:          alpn,
+		V:             "2",
+		Protocol:      "vless",
+		Flow:          option.Flow,
 	}
 	if option.TLS {
 		s.TLS = "tls"

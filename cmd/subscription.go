@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -115,14 +116,23 @@ func resolveSubscriptionAsSIP008(log *logrus.Logger, opt *dialer.GlobalOption, b
 }
 
 func pullDialersFromSubscription(log *logrus.Logger, opt *dialer.GlobalOption, subscription string) (dialers []*dialer.Dialer, err error) {
-	resp, err := http.Get(subscription)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	var b []byte
+	if strings.HasPrefix(subscription, "file://") {
+		path := subscription[7:]
+		b, err = os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		resp, err := http.Get(subscription)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		b, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if dialers, err = resolveSubscriptionAsSIP008(log, opt, b); err == nil {
 		return dialers, nil
